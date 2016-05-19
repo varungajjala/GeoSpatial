@@ -1,0 +1,383 @@
+package geospatial.Operation4;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
+
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.function.FlatMapFunction;
+import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.VoidFunction;
+import org.apache.spark.broadcast.Broadcast;
+
+
+public class App {
+    public static boolean flag;
+
+	public static class Pair implements Serializable
+	  {
+	    public Points point1 = null;
+	    public Points point2 = null;
+	    List<Points> subsidaryPoints = new ArrayList<Points>();
+	    public double distance = 0.0;
+	 
+	    public void updateAdditional(List<Points> subsidaryPoints)
+	    {  
+	    	this.subsidaryPoints = subsidaryPoints;
+	    }
+	 
+	    public Pair(Points point1, Points point2)
+	    {
+	      this.point1 = point1;
+	      this.point2 = point2;
+	      calcDistance();
+	    }
+	 
+	    public void update(Points point1, Points point2, double distance)
+	    {
+	      this.point1 = point1;
+	      this.point2 = point2;
+	      this.distance = distance;
+	    }
+	 
+	    public void calcDistance()
+	    {  this.distance = distance(point1, point2);  }
+	 
+	    public String toString()
+	    {  return point1 + "-" + point2 + " : " + distance;  }
+	  }
+	 
+	  public static double distance(Points p1, Points p2)
+	  {
+	    double xdist = p2.getX() - p1.getX();
+	    double ydist = p2.getY() - p1.getY();
+	    return Math.hypot(xdist, ydist);
+	  }
+	 
+	  public static Pair bruteForce(List<? extends Points> points)
+	  {
+	    int numPoints = points.size();
+	    if (numPoints < 2)
+	      return null;
+	    Pair pair = new Pair(points.get(0), points.get(1));
+	    if (numPoints > 2)
+	    {
+	      for (int i = 0; i < numPoints - 1; i++)
+	      {
+	        Points point1 = points.get(i);
+	        for (int j = i + 1; j < numPoints; j++)
+	        {
+	          Points point2 = points.get(j);
+	          double distance = distance(point1, point2);
+	          if (distance < pair.distance)
+	            pair.update(point1, point2, distance);
+	        }
+	      }
+	    }
+	    return pair;
+	  }
+	  public static void sortByX(List<? extends Points> points)
+	  {
+	    Collections.sort(points, new Comparator<Points>() {
+	        public int compare(Points point1, Points point2)
+	        {
+	          if (point1.getX() < point2.getX())
+	            return -1;
+	          if (point1.getX() > point2.getX())
+	            return 1;
+	          return 0;
+	        }
+	      }
+	    );
+	  }
+	  public static Pair divideAndConquer(List<? extends Points> points)
+	  {
+	    List<Points> pointsSortedByX = new ArrayList<Points>(points);
+	    sortByX(pointsSortedByX);
+	    List<Points> pointsSortedByY = new ArrayList<Points>(points);
+	    sortByY(pointsSortedByY);
+	    return divideAndConquer(pointsSortedByX, pointsSortedByY);
+	  }
+	  private static Pair divideAndConquer(List<? extends Points> pointsSortedByX, List<? extends Points> pointsSortedByY)
+	  {
+	    int numPoints = pointsSortedByX.size();
+	    if (numPoints <= 3)
+	      return bruteForce(pointsSortedByX);
+	 
+	    int dividingIndex = numPoints >>> 1;
+	    List<? extends Points> leftOfCenter = pointsSortedByX.subList(0, dividingIndex);
+	    List<? extends Points> rightOfCenter = pointsSortedByX.subList(dividingIndex, numPoints);
+	 
+	    List<Points> tempList = new ArrayList<Points>(leftOfCenter);
+	    sortByY(tempList);
+	    Pair closestPair = divideAndConquer(leftOfCenter, tempList);
+	 
+	    tempList.clear();
+	    tempList.addAll(rightOfCenter);
+	    sortByY(tempList);
+	    Pair closestPairRight = divideAndConquer(rightOfCenter, tempList);
+	 
+	    if (closestPairRight.distance < closestPair.distance)
+	      closestPair = closestPairRight;
+	 
+	    tempList.clear();
+	    double shortestDistance =closestPair.distance;
+	    double centerX = rightOfCenter.get(0).getX();
+	    for (Points point : pointsSortedByY)
+	      if (Math.abs(centerX - point.getX()) < shortestDistance)
+	        tempList.add(point);
+	 
+	    for (int i = 0; i < tempList.size() - 1; i++)
+	    {
+	      Points point1 = tempList.get(i);
+	      for (int j = i + 1; j < tempList.size(); j++)
+	      {
+	        Points point2 = tempList.get(j);
+	        if ((point2.getY() - point1.getY()) >= shortestDistance)
+	          break;
+	        double distance = distance(point1, point2);
+	        if (distance < closestPair.distance)
+	        {
+	          closestPair.update(point1, point2, distance);
+	          shortestDistance = distance;
+	        }
+	      }
+	    }
+	    
+	    return closestPair;
+	  }
+	 
+	  public static void sortByY(List<? extends Points> points)
+	  {
+	    Collections.sort(points, new Comparator<Points>() {
+	        public int compare(Points point1, Points point2)
+	        {
+	          if (point1.getY() < point2.getY())
+	            return -1;
+	          if (point1.getY() > point2.getY())
+	            return 1;
+	          return 0;
+	        }
+	      }
+	    );
+	  }
+	  
+	 /* def this(clientArgs: ClientArguments, spConf: SparkConf) =
+			    this(clientArgs, new Configuration(), spConf)*/
+
+		public static int count=0;	
+
+	public static Boolean Closest(String input,String output) {
+
+	    JavaSparkContext sc=new JavaSparkContext(new SparkConf().setAppName("App").setMaster("spark://192.168.0.4:7077").set("spark.eventLog.enabled","true"));
+		//JavaSparkContext sc=new JavaSparkContext(new SparkConf().setAppName("Closest").setMaster("spark://10.144.83.157:7077"));
+	    sc.addJar("/home/nagarjuna/DDS_Project_Team17/Programs/operation4.jar");
+	    
+	    //String  x = "hdfs://master:54310/team17/operation3/FarthestPairandClosestPairTestData.csv";
+	    //String  x = "hdfs://master:54310/team17/arealm_closest_pair.csv";
+	    String  x = "hdfs://master:54310/team17/areawater_closest_pair.csv";
+	    
+	    Broadcast<String> path = sc.broadcast(x);
+	    JavaRDD<String> str1=sc.textFile(path.value());
+	   //Find the points of polygon and load into RDD
+	    JavaRDD<String> helo = str1.map(new Function<String,String> ()
+	            {
+	                public String call(String s)
+	                {
+	                	 double num[]=new double[2];
+	                   
+	                    int i=0;
+	                    if(s.equalsIgnoreCase("x,y")){return "";}
+	                    System.out.println(s);
+	                    String[] d=s.split(",");
+	                    for(int j=0;j<d.length;j++){
+	                    	num[j]=Double.parseDouble(d[j].trim());
+	                    }
+	                    
+	                   /*while(i<4)
+	                    {
+	                        num[i]=Double.parseDouble(d[i]);
+	                        if(i==0)
+	                            num[4]=num[i];
+	                        else if(i==2)
+	                            num[6]=num[i];
+	                        else if(i==1)
+	                            num[7]=num[i];
+	                        else if(i==3)
+	                            num[5]=num[i];
+	                        i++;        
+	                    }*/	
+	                    String u=Arrays.toString(num);
+	                    return u; 
+	                }
+	            });
+	    
+	    JavaRDD<Pair> ClosestPair = helo.mapPartitions(new FlatMapFunction<Iterator<String>,Pair> (){
+
+			public Iterable<Pair> call(Iterator<String> t) throws Exception {
+                List<Points> points = new ArrayList<Points>();
+                ArrayList<String> x = new ArrayList<String>();
+                ArrayList<Integer> y = new ArrayList<Integer>();
+                List<Pair> result = new ArrayList<Pair>();
+                count++;
+                int j = 0;
+                while (t.hasNext()) {
+                	String string = t.next();
+                	if(string.equalsIgnoreCase("")){if(t.hasNext()==true){string=t.next();} else{break;}}
+                x.add(string);
+                String p2 = x.get(j++);
+                p2 = p2.substring(1, (p2.length() - 1)).replaceAll(" ","");
+                String[] p1 = p2.split(",");
+                double num[] = new double[p1.length];
+                for (int i = 0; i < p1.length; i++) {
+
+                num[i] = Double.valueOf(p1[i]);
+                num[i+1] = Double.valueOf(p1[i+1]);
+                points.add(new Points(num[i], num[i+1]));
+                
+                i++;
+                }
+                }
+                System.out.println("\n\n------------");
+                for(Points p: points)
+                {
+                	System.out.println(p.getX()+","+p.getY());
+                }
+                flag = true;
+                Pair dqClosestPair = divideAndConquer(points);
+                if(flag==true){
+                	sortByX(points);
+            	    double cornerDistLeft=points.get(0).getX()+dqClosestPair.distance;
+            	    double cornerDistRight= points.get(points.size()-1).getX() - dqClosestPair.distance;
+            	    List<Points> extraPoints = new ArrayList<Points>();
+            	    List<Points> Temporary = new ArrayList<Points>(points);
+            	    sortByX(Temporary);
+            	    extraPoints.add(dqClosestPair.point1);
+            	    extraPoints.add(dqClosestPair.point2);
+
+            	    for(Points p:Temporary)
+            	    {
+            	    	if(p.getX()<=cornerDistLeft)
+            	    	{
+            	    		if(extraPoints.contains(p)==false){
+            	    		extraPoints.add(p);}
+            	    	}
+            	    	else if(p.getX()>cornerDistLeft)
+            	    	{
+            	    		break;
+            	    	}
+            	    }
+            	   
+            	    for(int m=Temporary.size()-1;m>=0;m--)
+            	    {
+            	    	if(Temporary.get(m).getX()>=cornerDistRight)
+            	    	{
+            	    		if(extraPoints.contains(Temporary.get(m))==false){
+            	    		extraPoints.add(Temporary.get(m));}
+            	    	}
+            	    	else if(Temporary.get(m).getX()<cornerDistRight)
+            	    	{
+            	    		break;
+            	    	}
+            	    }
+            	   dqClosestPair.updateAdditional(extraPoints);
+            	    
+            	   
+            	   }
+                System.out.println(dqClosestPair.point1+","+dqClosestPair.point2+","+dqClosestPair.distance+" List of points: "+dqClosestPair.subsidaryPoints);
+                
+
+                result.add(dqClosestPair);
+                return result;
+			}
+	    	
+	    });
+	    
+	    JavaRDD<Pair> finalResult = ClosestPair.coalesce(1);
+	    
+	    JavaRDD<String> FinalClosestPair = finalResult.mapPartitions(new FlatMapFunction<Iterator<Pair>,String> (){
+
+			public Iterable<String> call(Iterator<Pair> t) throws Exception {
+                List<Points> points = new ArrayList<Points>();
+                ArrayList<String> x = new ArrayList<String>();
+                ArrayList<Integer> y = new ArrayList<Integer>();
+                List<String> result = new ArrayList<String>();
+
+
+                int j = 0;
+                while (t.hasNext()) {
+                Pair m = t.next();
+
+                for(Points l:m.subsidaryPoints)
+                {
+                	 String p2 = l.getX()+","+l.getY();
+                     String[] p1 = p2.split(",");
+                     double num[] = new double[p1.length];
+                     for (int i = 0; i < p1.length; i++) {
+
+                     num[i] = Double.valueOf(p1[i]);
+                     num[i+1] = Double.valueOf(p1[i+1]);
+                     points.add(new Points(num[i], num[i+1]));
+                     
+                     i++;
+                     }
+                }
+
+               
+                }
+                System.out.println("\n\n------------");
+                for(Points p: points)
+                {
+                	System.out.println(p.getX()+","+p.getY());
+                }
+                flag = false;
+                Pair dqClosestPair = divideAndConquer(points);
+               
+                
+                //System.out.println(dqClosestPair.point1+","+dqClosestPair.point2+","+dqClosestPair.distance+" List of extra points: "+dqClosestPair.subsidaryPoints);
+                String closest_pair = dqClosestPair.point1.getX()+","+dqClosestPair.point1.getY()+" "+ dqClosestPair.point2.getX()+","+dqClosestPair.point2.getY();
+                result.add(closest_pair);
+                String Subsidiary_points = null;
+                int i = 0;
+                for(i = 0;i<dqClosestPair.subsidaryPoints.size();i++)
+                {
+                	System.out.println("inside subsidiary");
+                	Subsidiary_points = dqClosestPair.subsidaryPoints.get(i).getX()+","+dqClosestPair.subsidaryPoints.get(i).getY()+"\n";
+                	result.add(Subsidiary_points);
+                }
+                return result;
+			}
+	    	
+	    });
+	    
+	    boolean flag = true;
+	    try{
+	    FinalClosestPair.saveAsTextFile("hdfs://master:54310/team17/operation4/output_sd.txt");
+	    }
+	    catch(Exception e)
+	    {
+	    	flag = false;
+	        System.out.println(e.getMessage());
+	    }
+	    finally
+	    {
+	    	return flag;
+	    }
+	}//end of Closest
+	
+
+	public static void main(String[] args) {
+		
+		Closest("asdsad", "asdasd");
+		
+	}
+	
+}//end of class
+    
+

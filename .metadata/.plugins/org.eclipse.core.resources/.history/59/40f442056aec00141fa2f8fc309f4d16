@@ -1,0 +1,138 @@
+package geospatial.operation1;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+import java.util.regex.Pattern;
+import java.util.Collections;
+
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.function.FlatMapFunction;
+import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.Function2;
+
+import com.vividsolutions.jts.geom.*;
+import com.vividsolutions.jts.operation.union.CascadedPolygonUnion;
+
+import org.apache.spark.SparkConf;
+
+public class App
+{
+	
+	public static void main(String[] args)
+    {
+	    SparkConf conf = new SparkConf().setAppName("App").setMaster("spark://192.168.0.4:7077").set("spark.eventLog.enabled","true");
+    	JavaSparkContext sc = new JavaSparkContext(conf);
+    	sc.addJar("/home/nagarjuna/DDS_Project_Team17/Programs/operation1.jar");
+    	sc.addJar("/home/nagarjuna/DDS_Project_Team17/Programs/jts-1.13.jar");
+    	
+    	// Reading the input for union operation
+    	JavaRDD<String> lines = sc.textFile("hdfs://master:54310/team17/arealm.csv");
+    	
+    	// Splitting the given input into iterable strings for mappartition 
+    	JavaRDD<String> words = lines.flatMap(new FlatMapFunction<String, String>()
+            {
+                public Iterable<String> call(String s)
+                {
+                    return Arrays.asList(s.split(","));
+                }
+            }
+        );
+    	
+    	// Map Partition function constructs local union for all the rectangles inside each partition
+    	JavaRDD<Geometry> res= words.mapPartitions(new FlatMapFunction<Iterator<String>, Geometry>()
+            {
+    		
+    		//System.out.print("Inside map");
+                public Iterable<Geometry> call(Iterator<String> t)
+                {
+            	
+                    GeometryFactory fact = new GeometryFactory();
+                    
+                    Geometry local_union = null;
+			        Polygon poly = null;
+                  
+  		    ArrayList<Geometry> union_Geometry = new ArrayList<Geometry>();
+			        
+                    while(t.hasNext())
+                    {
+                         String x1_string = t.next();
+                         String y1_string = t.next();
+                         String x2_string = t.next();
+                         String y2_string = t.next();
+                         
+                         // skip the lines if it contains x1,y1 meta data co-ordinates
+                         if(x1_string.equals("x1"))
+                        	continue;
+           	        
+                    	 Double x1 = Double.parseDouble(x1_string);
+			        	 Double y1 = Double.parseDouble(y1_string);
+			        	 Double x2 = Double.parseDouble(x2_string);
+			        	 Double y2 = Double.parseDouble(y2_string);
+			        	 
+			        	 Coordinate[] coordinates1 = new Coordinate[] {
+                                                                        new Coordinate(x1,y1),
+			        			                                        new Coordinate(x1,y2),
+			        			                                        new Coordinate(x2,y2),
+			        			                                        new Coordinate(x2,y1),
+			        			                                        new Coordinate(x1,y1)
+                                                                      };
+			        
+                        // construction of local union for all the rectangles
+                        poly = fact.createPolygon(coordinates1);
+                        union_Geometry.add(poly);                                   
+                    }
+
+		    CascadedPolygonUnion cp = new CascadedPolygonUnion(union_Geometry);
+                    
+                    local_union = cp.union();
+              
+                     
+                    ArrayList<Geometry> result = new ArrayList<Geometry>(); 
+                    result.add(local_union);
+                    return result;
+                }
+            }
+        );
+
+    	
+   
+    	JavaRDD<Geometry> local_union  = res.repartition(1);
+    	
+ 
+        JavaRDD<Geometry> final_union = local_union.mapPartitions(new FlatMapFunction<Iterator<Geometry>, Geometry>()
+        {
+		public Iterable<Geometry> call(Iterator<Geometry> t)
+                {
+			ArrayList<Geometry> union_Geometry = new ArrayList<Geometry>();
+			while(t.hasNext())
+                        {
+				union_Geometry.add(t.next());
+				
+			}
+
+			Geometry global_union = null;
+		        CascadedPolygonUnion cp = new CascadedPolygonUnion(union_Geometry);
+                        global_union = cp.union();
+			
+                    	ArrayList<Geometry> result = new ArrayList<Geometry>(); 
+                    	result.add(global_union);
+                    	System.out.println(global_union);
+                    	return result;
+			
+
+		}});
+
+	
+
+        System.out.println("Done reduce");
+	//final_union.saveAsTextFile("file:///home/nagarjuna/aream1_output.txt");
+
+    		
+        }
+}
+

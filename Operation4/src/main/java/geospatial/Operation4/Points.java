@@ -1,0 +1,27 @@
+package geospatial.Operation4;
+
+import java.io.Serializable;
+
+public class Points implements Serializable
+{
+	
+	double x;
+	double y;
+	
+	Points(double x1,double y1)
+	{
+		x = x1;
+		y = y1;
+	}
+	
+	double getX()
+	{
+		return this.x;
+	}
+	
+	double getY()
+	{
+		return this.y;
+	}
+	
+}

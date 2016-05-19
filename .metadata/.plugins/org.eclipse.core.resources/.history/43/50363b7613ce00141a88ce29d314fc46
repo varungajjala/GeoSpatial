@@ -1,0 +1,242 @@
+package test_group_1.test_artifact_1;
+
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Pattern;
+import java.util.Collections;
+
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.Function2;
+import org.apache.spark.util.Vector;
+import org.apache.spark.SparkConf;
+
+import scala.Tuple2;
+import test_group_1.test_artifact_1.*;
+
+import java.awt.Polygon;
+import java.awt.geom.*;
+public class App 
+{
+	
+    public static void main( String[] args )
+    {
+    	SparkConf conf = new SparkConf().setAppName("App").setMaster("spark://192.168.117.131:7077");
+    	JavaSparkContext sc = new JavaSparkContext(conf);
+    	sc.addJar("/home/nagarjuna/Downloads/Operation1.jar");
+    	
+		class ParsePolygon implements Function<String, Vector>
+    	{
+    		public Vector call(String line){
+    			 String[] splits = line.split(",");
+    			 double[] data = new double[10];
+    			 
+    			 data[0] = Double.parseDouble(splits[0]);
+    			 data[1] = Double.parseDouble(splits[1]);
+    			 data[2] = Double.parseDouble(splits[2]);
+    			 data[3] = Double.parseDouble(splits[1]);
+    			 data[4] = Double.parseDouble(splits[2]);
+    			 data[5] = Double.parseDouble(splits[3]);
+    			 data[6] = Double.parseDouble(splits[0]);
+    			 data[7] = Double.parseDouble(splits[3]);
+    			 data[8] = -1;
+    			 data[9] = -1;
+    			 
+    			 //System.out.println("parsepolygon" + data[0]);
+    			 //System.out.println(data);
+    			 
+    			 return new Vector(data);
+
+    		}
+    	}
+    	
+    	
+    	
+    	class Polyunion2 implements Function2<Vector, Vector, Vector>
+    	{
+    		public Path2D form_shape(double[] a_arr)
+    		{
+    		  	
+    		  //System.out.println("inside form shape");	
+    		  Path2D p=new Path2D.Double();
+      		  int i = 0;
+      		  int len1 = a_arr.length;
+      		  
+      		  p.moveTo(a_arr[0],a_arr[1]);
+      		  double[] start_point = new double[2];
+      		  start_point[0] = a_arr[0];
+      		  start_point[1] = a_arr[1];
+      		  p.moveTo(start_point[0],start_point[1]);
+      		  //System.out.println(""+a_arr[0]+","+a_arr[1]);
+      		  for(i = 0;i+3<len1;)
+      		  {
+      			  //System.out.println(""+a_arr[i+2]+","+a_arr[i+3]);
+      			  if((a_arr[i+2] != -1) && (a_arr[i+3] != -1))
+      			  {
+      				  
+      			    p.lineTo(a_arr[i+2],a_arr[i+3]);
+      			    //p.moveTo(a_arr[i+2],a_arr[i+3]);
+      			    i = i+2;
+      			  }
+      			  else
+      			  {
+      				  //System.out.println("inside -1"+a_arr[i]+","+a_arr[i+1]);
+      				  //System.out.println("final line to"+start_point[0]+","+start_point[1]);
+      				  p.lineTo(start_point[0],start_point[1]);
+      				  
+      				  if(i+5 < len1)
+      				  {
+      					  start_point[0] = a_arr[4];
+      					  start_point[1] = a_arr[5];
+      					  p.moveTo(start_point[0],start_point[1]);
+      					  
+      				  }
+      				  
+      				  i = i+4;
+      					  
+      			  }
+      				  
+      			  
+      		  }
+      		 
+      	     p.closePath();
+      		 
+      		 return p; 
+    		}
+    		
+    		
+    		public double[] describeCurrentSegment(PathIterator pi) {
+    			double[] res_cordinates = new double[2];
+     		    double[] coordinates = new double[6];
+    		    int type = pi.currentSegment(coordinates);
+    		    switch (type) {
+    		    case PathIterator.SEG_MOVETO:
+    		      //System.out.println("move to " + coordinates[0] + ", " + coordinates[1]);
+    		      res_cordinates[0] = coordinates[0];
+    		      res_cordinates[1] = coordinates[1];
+    		      
+    		      break;
+    		    case PathIterator.SEG_LINETO:
+    		      //System.out.println("line to " + coordinates[0] + ", " + coordinates[1]);
+    		      res_cordinates[0] = coordinates[0];
+    		      res_cordinates[1] = coordinates[1];
+    		      
+    		      break;
+    		    case PathIterator.SEG_QUADTO:
+    		      //System.out.println("quadratic to " + coordinates[0] + ", " + coordinates[1] + ", "
+    		      //    + coordinates[2] + ", " + coordinates[3]);
+    		      break;
+    		    case PathIterator.SEG_CUBICTO:
+    		      //System.out.println("cubic to " + coordinates[0] + ", " + coordinates[1] + ", "
+    		      //    + coordinates[2] + ", " + coordinates[3] + ", " + coordinates[4] + ", " + coordinates[5]);
+    		      break;
+    		    case PathIterator.SEG_CLOSE:
+    		      //System.out.println("close");
+    		      res_cordinates[0] = -1;
+    		      res_cordinates[1] = -1;
+    		      
+    		      break;
+    		    default:
+    		      break;
+    		    }
+    		    return res_cordinates;
+    		  }
+    		
+    		
+    		public Vector call(Vector a, Vector b)
+    		{
+    			
+    		  //System.out.println("inside reduce");	
+    		  int len1 = a.length();
+    		  int len2 = b.length();
+             
+    		  double[] a_arr = new double[a.length()]; 
+    		  double[] b_arr = new double[b.length()];
+    		  a_arr = a.elements();
+    		  b_arr = b.elements();
+    		  Path2D p1 = form_shape(a_arr);
+    		  Path2D p2 = form_shape(b_arr);
+    		  
+    		  //int[] ar1={1,1,3,3};
+    		  //int[] ar2={1,5,5,1};
+    		  
+    		  //Polygon p1=new Polygon(ar1,ar2,4);
+    		  Area a1 = new Area(p1);
+    		  Area a2 = new Area(p2);
+    		  a1.add(a2);
+    		  //System.out.println("After Add");
+    		  //System.out.println(a1.isPolygonal());
+    		  
+    		  double[] co_ordinates = new double[2];
+    		  ArrayList<Double> res_list = new ArrayList<Double>(); 
+    		  PathIterator pi = a1.getPathIterator(null);
+               
+    		   while (pi.isDone() == false) {
+    			  // System.out.println("inside pi is done");
+    		      co_ordinates = describeCurrentSegment(pi);
+    		      res_list.add(co_ordinates[0]);
+    		      res_list.add(co_ordinates[1]);
+    		      //System.out.println(""+co_ordinates[0]+","+co_ordinates[1]);
+    		      pi.next();
+    		    }
+    		   
+    		   Double[] D_array = new Double[res_list.size()];
+               D_array =  res_list.toArray(D_array);
+               //System.out.println("D_aRRAY SIZE"+D_array.length);
+               double[] result = ArrayUtils.toPrimitive(D_array);
+               return new Vector(result);
+    		   
+    		}
+    	}
+    	
+
+    	JavaRDD<String> lines = sc.textFile("hdfs://master:54310/home/nagarjuna/data/UnionTest.txt");
+    	JavaRDD<Vector> points = lines.map(new ParsePolygon());
+    	Vector v = points.reduce(new Polyunion2());
+    	
+    	double[] dd = v.elements();
+    	for (int i=0;i< v.length();i=i+2){
+    		System.out.println(dd[i] + ", "+ dd[i+1]);
+    	}
+    	
+    	//JavaRDD<Integer> lineLengths = lines.map(new GetLength());
+    	//int totalLength = lineLengths.reduce(new Sum());
+    	//long totalLength = lineLengths.count();
+    	//List<Integer> totalLength = lineLengths.take(5);
+    	//List<Vector> totalLength = points.take(5);
+    	//JavaRDD<Double> totalLength = points.map(new calcDist());
+    	//JavaPairRDD<Vector,Vector> carts = points.cartesian(points);
+    	//List<Tuple2<Vector,Vector>> values = carts.take(5);
+    	//JavaRDD<Double> distances = carts.map(new calcDist());
+    	//List<Tuple2<Vector,Vector>> totalLength = carts.take(1);
+    	//List<Double> dist = distances.take(5);
+    	
+    	
+    	
+    	
+    	//System.out.println(values);
+    	//System.out.println(dist);
+    	
+    	//String logFile = "/home/nagarjuna/Downloads/spark/README.md";
+    	//JavaSparkContext sc = new JavaSparkContext("local","App", "/home/nagarjuna/Downloads/spark", "");
+    	//JavaRDD<String> logData = sc.textFile(logFile).cache();
+    	
+    	/*
+    	long numAs = logData.filter(new Function<String,Boolean>()
+    	{
+    		public Boolean call(String s) {return s.contains("a");}
+    	}).count();
+    	
+    	long numBs = logData.filter(new Function<String,Boolean>()
+    	{
+    		public Boolean call(String s) {return s.contains("b");}
+    	}).count();
+    	
+        System.out.println( "lines with a:" + numAs + "lines with b:"+ numBs);
+        */
+    }
+}

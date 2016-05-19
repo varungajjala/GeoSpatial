@@ -1,0 +1,150 @@
+// RangeQuery
+package geospatial.operation5;
+ 
+import java.util.List;
+ 
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.rdd.RDD;
+import org.apache.spark.util.*;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.function.*;
+import org.apache.spark.broadcast.Broadcast;
+ 
+import scala.Tuple2;
+
+//Class that defines a rectangle 
+class Rectangle
+{
+    double x;
+    double y;
+    double width;
+    double height;
+     
+    Rectangle(double x1,double y1,double wid, double h)
+    {
+        x = x1;
+        y = y1;
+        width = wid;
+        height = h;
+    }
+    
+    //function which returns true or false based if a rectangle contains one more rectangle or not
+    boolean contains(Rectangle r)
+    {
+        if((x <= r.x) && (y >= r.y) && ((x + width) >= (r.x + r.width)) && ((y - height) <= (r.y - r.height)))
+        {
+            return true;
+        }
+        return false;
+    }
+}
+ 
+public class App
+{
+     
+    public static void main(String[] args)
+    {
+    	
+        SparkConf conf = new SparkConf().setAppName("App").setMaster("spark://192.168.0.4:7077").set("spark.eventLog.enabled","true");
+         
+        JavaSparkContext spark = new JavaSparkContext(conf);
+        spark.addJar("/home/nagarjuna/DDS_Project_Team17/Programs/operation5.jar");
+         
+        //map function that returns the co-ordinates of the search rectangle  
+        class SearchPolygon implements Function<String,Vector>
+        {
+            public Vector call(String line)
+            {
+                 String[] splits = line.split(",");
+                 double[] data = new double[4];
+                 
+                 data[0] = Math.min(Double.parseDouble(splits[0]),Double.parseDouble(splits[2]));
+                 data[1] = Math.max(Double.parseDouble(splits[1]),Double.parseDouble(splits[3]));
+                 data[2] = Math.abs(Double.parseDouble(splits[2])-Double.parseDouble(splits[0]));
+                 data[3] = Math.abs(Double.parseDouble(splits[3])-Double.parseDouble(splits[1]));
+                 Vector v1=new Vector(data);
+                 return v1;
+            }
+        }
+         
+        //Reading the set of polygons from HDFS
+        //JavaRDD<String> input1 = spark.textFile("hdfs://master:54310/team17/operation5/RangeQueryTestData1.csv");
+        JavaRDD<String> input1 = spark.textFile("hdfs://master:54310/team17/arealm.csv");
+        
+        //Reading the search polygon from HDFS
+        //JavaRDD<String> input2 = spark.textFile("hdfs://master:54310/team17/operation5/RangeQueryTestData2.csv");
+        JavaRDD<String> input2 = spark.textFile("hdfs://master:54310/team17/arealmrange.csv");
+        
+        //map function that returns the co-ordinates of each rectangle as a vector
+        JavaRDD<Vector> points = input1.map(new Function<String,Vector>()
+            {
+                public Vector call(String line)
+                {
+                    String[] splits = line.split(",");
+                    double[] data = new double[4];
+                    data[0] = Double.parseDouble(splits[0]);
+                    data[1] = Double.parseDouble(splits[1]);
+                    data[2] = Double.parseDouble(splits[2]);  
+                    data[3] = Double.parseDouble(splits[3]);
+                    Vector v1=new Vector(data);
+                    return v1;
+                }
+            }
+        );
+         
+       
+        JavaRDD<Vector> points_search = input2.map(new SearchPolygon());
+         
+        List<Vector> var = points_search.collect();
+         
+        //Broadcasting the co-ordinates of the search polygon
+        final Broadcast<List<Vector>> var_broadcast = spark.broadcast(var);
+         
+       
+        JavaRDD<String> res = points.map(new Function<Vector,String>()
+            {
+                public String call(Vector v1)
+                {
+                    double [] d1  = v1.elements();
+                    double x_val  = Math.min(d1[0],d1[2]);
+                    double y_val  = Math.max(d1[1],d1[3]);
+                    double wid    = Math.abs(d1[2]-d1[0]);
+                    double height = Math.abs(d1[3]-d1[1]);
+                    
+                    
+                    List<Vector> list = var_broadcast.value();
+                    Vector v = list.get(0);
+                    double [] d2 = v.elements();
+                    
+                    //Constructing the two Rectangles 
+                    Rectangle rect1 = new Rectangle(x_val,y_val,wid,height);           
+                    Rectangle rect2 = new Rectangle(d2[0],d2[1],d2[2],d2[3]);
+                    
+                    if(rect2.contains(rect1))
+                    {
+                        return d1[0] + "," + d1[1] + "," + d1[2] + "," + d1[3];
+                    }
+                    else
+                    {
+                        return "none";
+                    }
+                }
+            }
+        );
+         
+        //filter function to remove all the polygons which does not contain the search polygon
+        JavaRDD<String> final_output = res.filter(new Function<String,Boolean>()
+            {
+                public Boolean call(String str)
+                {
+                    return (str.contains(","));
+                }
+            }
+        );
+         
+        //Saving the output to HDFS
+        final_output.repartition(1).saveAsTextFile("hdfs://master:54310/team17/operation5/Output_md.txt");
+    }
+}

@@ -1,0 +1,401 @@
+// Farthest Point
+package geospatial.operation3;
+
+import java.awt.Shape;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Area;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.Arrays;
+import java.util.List;
+
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.rdd.RDD;
+import org.apache.spark.util.*;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.function.*;
+import org.apache.spark.broadcast.Broadcast;
+import org.apache.spark.api.java.function.FlatMapFunction;
+
+class QuickHull
+{
+    public ArrayList<points> quickHull(ArrayList<points> pointss)
+    {
+        ArrayList<points> convexHull = new ArrayList<points>();
+
+        if (pointss.size() < 3)
+            return (ArrayList) pointss.clone();
+
+        int minpoints = -1, maxpoints = -1;
+
+        double minX = Double.MAX_VALUE;
+        double maxX = Double.MIN_VALUE;
+
+        for (int i = 0; i < pointss.size(); i++)
+        {
+            if (pointss.get(i).x < minX)
+            {
+                minX = pointss.get(i).x;
+                minpoints = i;
+            }
+            if (pointss.get(i).x > maxX)
+            {
+                maxX = pointss.get(i).x;
+                maxpoints = i;
+            }
+        }
+
+        points A = pointss.get(minpoints);
+        points B = pointss.get(maxpoints);
+
+        convexHull.add(A);
+        convexHull.add(B);
+        pointss.remove(A);
+        pointss.remove(B);
+
+        ArrayList<points> leftSet = new ArrayList<points>();
+        ArrayList<points> rightSet = new ArrayList<points>();
+
+        for (int i = 0; i < pointss.size(); i++)
+        {
+            points p = pointss.get(i);
+            if (pointsLocation(A, B, p) == -1)
+                leftSet.add(p);
+            else if (pointsLocation(A, B, p) == 1)
+                rightSet.add(p);
+        }
+
+        hullSet(A, B, rightSet, convexHull);
+        hullSet(B, A, leftSet , convexHull);
+
+        return convexHull;
+    }
+
+    public double distance(points A, points B, points C)
+    {
+        double ABx = B.x - A.x;
+        double ABy = B.y - A.y;
+        double num = ABx * (A.y - C.y) - ABy * (A.x - C.x);
+
+        if (num < 0)
+            num = -num;
+
+        return num;
+    }
+
+    public void hullSet(points A, points B, ArrayList<points> set, ArrayList<points> hull)            
+    {
+
+        int insertPosition = hull.indexOf(B);
+
+        if (set.size() == 0)
+            return;
+
+        if (set.size() == 1)
+        {
+            points p = set.get(0);
+            set.remove(p);
+            hull.add(insertPosition, p);
+            return;
+        }
+
+        double dist = Double.MIN_VALUE;
+        int furthestpoints = -1;
+
+        for (int i = 0; i < set.size(); i++)
+        {
+            points p = set.get(i);
+            double distance = distance(A, B, p);
+
+            if (distance > dist)
+            {
+                dist = distance;
+                furthestpoints = i;
+            }
+        }
+
+        points P = set.get(furthestpoints);
+        set.remove(furthestpoints);
+        hull.add(insertPosition, P);
+        // Determine who's to the left of AP
+
+        ArrayList<points> leftSetAP = new ArrayList<points>();
+
+        for (int i = 0; i < set.size(); i++)
+        {
+            points M = set.get(i);
+            
+            if (pointsLocation(A, P, M) == 1)
+            {
+                leftSetAP.add(M);
+            }
+        }
+
+        // Determine who's to the left of PB
+
+        ArrayList<points> leftSetPB = new ArrayList<points>();
+
+        for (int i = 0; i < set.size(); i++)
+        {
+            points M = set.get(i);
+
+            if (pointsLocation(P, B, M) == 1)
+            {
+                leftSetPB.add(M);
+            }
+        }
+
+        hullSet(A, P, leftSetAP, hull);
+        hullSet(P, B, leftSetPB, hull);
+    }
+
+    public int pointsLocation(points A, points B, points P)
+    {
+
+        double cp1 = (B.x - A.x) * (P.y - A.y) - (B.y - A.y) * (P.x - A.x);
+
+        if (cp1 > 0.0)
+            return 1;
+        else if (cp1 == 0.0)
+            return 0;
+        else
+            return -1;
+    }
+}
+
+// Class to store list of point coordinates
+class points implements Serializable
+{
+    double x;
+    double y;
+    
+    points (double x1, double y1)
+    {
+        x = x1;
+        y = y1;
+    }
+}
+
+class point_array implements Serializable
+{
+	ArrayList<points> arr;
+	
+	point_array()
+	{
+		arr = new ArrayList<points>();
+	}
+}
+
+// Class to store list of points
+class list_points implements Serializable
+{
+	ArrayList<String> arr;
+	
+	list_points()
+	{
+		arr = new ArrayList<String>();
+	}
+}
+
+// App class for finding closest pair 
+public class App 
+{
+    public static void main( String[] args )
+    {            
+        // Creating Spark configuration and context
+        SparkConf conf = new SparkConf().setAppName("App").setMaster("spark://192.168.0.4:7077").set("spark.eventLog.enabled","true");
+        final JavaSparkContext spark = new JavaSparkContext(conf);
+        spark.addJar("/home/nagarjuna/DDS_Project_Team17/Programs/operation3.jar");
+
+        // Loading the data from text file
+        JavaRDD<String> ip1 = spark.textFile("hdfs://master:54310/team17/areawater.csv");
+
+        //Splitting up the points to get co-ordinates
+        JavaRDD<String> words = ip1.flatMap(new FlatMapFunction<String, String>()
+            {
+                public Iterable<String> call(String s)
+                {
+                	return Arrays.asList(s.split(","));
+                }
+            }
+        );
+
+        // Finding Convex hull using quick hull on each partition
+        JavaRDD<point_array> res=words.mapPartitions(new FlatMapFunction<Iterator<String>, point_array>()
+            {
+
+                public Iterable<point_array> call(Iterator<String> pair)
+                {
+                    ArrayList<points> r = new ArrayList<points>();
+                    while(pair.hasNext())
+                    {
+                        r.add(new points(Double.parseDouble(pair.next()), Double.parseDouble(pair.next())));
+                    }
+
+                    QuickHull q1=new QuickHull();
+                    
+                    ArrayList<points> r1=q1.quickHull(r);
+                    ArrayList<point_array> result = new ArrayList<point_array>();
+                    point_array point_list = new point_array();
+                    
+                    point_list.arr.addAll(r1);
+                    result.add(point_list);
+                    
+                    return result;
+                }
+            }
+        );
+        
+        class global_convex_hull implements Function2<point_array,point_array,point_array>
+    	{
+    		public point_array call(point_array a,point_array b)
+    		{    			
+    			ArrayList<points> a1 = new ArrayList<points>();
+    			a1.addAll(a.arr);
+    			a1.addAll(b.arr);
+    			
+    			QuickHull q1=new QuickHull();
+                ArrayList<points> r1=q1.quickHull(a1);
+                
+                ArrayList<point_array> result = new ArrayList<point_array>();                
+                
+                point_array point_list = new point_array();
+                
+                point_list.arr.addAll(r1);
+                result.add(point_list);
+                
+                return point_list;    			
+    		}
+    	}
+        
+    	point_array result = res.reduce(new global_convex_hull());         
+        
+        /*Farthest point code starts from here */
+        JavaRDD<points> farin = spark.parallelize(result.arr);
+
+        // Broadcasting the RDD to all the partitions
+        final Broadcast<ArrayList<points>> var1 = spark.broadcast(result.arr);
+
+        // Checking farthest distance pairs in each partitions
+        JavaRDD<list_points> farpart = farin.mapPartitions(new FlatMapFunction<Iterator<points>, list_points>()
+            {
+                public Iterable<list_points> call(Iterator<points> pair)
+                {
+                    ArrayList<points> list = var1.value();
+                    double min_dist = 0;
+                    ArrayList<list_points> result = new ArrayList<list_points>();
+                    list_points far_points = new list_points();
+                    List out = new ArrayList<list_points>();
+
+                    // For all the pairs present in the list
+                    while(pair.hasNext())
+                    {
+                    	points p = pair.next();
+                    	double point1_x = p.x;
+                    	double point1_y = p.y;
+                    	double point2_x = 0;
+                    	double point2_y = 0;
+                    	for(int i = 0; i < list.size(); i++)
+                        {
+                    		point2_y = list.get(i).y;
+                    		point2_x = list.get(i).x;
+                    		double dist = Distance(point1_x, point1_y, point2_x, point2_y);
+                    		String s = point1_x + ","+ point1_y + "," + point2_x + "," + point2_y +"," + dist;                			
+                    		if (min_dist == 0 || (dist !=0 && dist > min_dist))
+                            {
+                    			min_dist = dist;
+                    			if (!far_points.arr.isEmpty())
+                                {
+                    				far_points.arr.clear();	
+                    			}                			
+                    			far_points.arr.add(s);                			
+                    		}
+                            else if( dist == min_dist )
+                            {
+                    			if(point1_x != point2_x || point1_y != point2_y)
+                                {
+                    				far_points.arr.add(s);        
+                    			}
+                    		}
+                    	}                    
+                    }
+
+                    out.add(far_points);
+                    return out;
+                }
+            }
+        );
+
+        // Getting the farthest distance pairs from earlier partitions
+        list_points farthest_dist_pairs = farpart.reduce(new Function2<list_points, list_points, list_points>()
+            {
+            	public list_points call(list_points list_1, list_points list_2)
+                {
+            	    String[] first_set  = ((String)list_1.arr.get(0)).split(",");
+            	    String[] second_set = ((String)list_2.arr.get(0)).split(",");				
+            	    
+            	    if (Double.parseDouble(first_set[4]) > Double.parseDouble(second_set[4]))
+                    {
+            	    	return list_1;					
+            	    }
+                    else if (Double.parseDouble(first_set[4]) == Double.parseDouble(second_set[4]))
+                    {
+            	    	list_1.arr.addAll(list_2.arr);
+            	    	return list_1;
+            	    }
+                    else
+                    {
+            	    	return list_2;
+            	    }
+            	}
+            
+            }
+        ); 
+        
+        ArrayList<String> farthest_points = eliminateDups(farthest_dist_pairs);
+        JavaRDD<String> output_farthest_points = spark.parallelize(farthest_points);
+        output_farthest_points.repartition(1).saveAsTextFile("hdfs://master:54310/team17/operation3/arealm_convex_hull_output_ld.txt");        
+    }
+
+    // Elimates the duplicate coordinates
+	public static ArrayList<String> eliminateDups(list_points list_pairs)
+    {
+		int size = list_pairs.arr.size();
+        
+        ArrayList<String> points = new ArrayList<String>();
+        ArrayList<String> dup    = new ArrayList<String>();
+       
+        for (int i = 0; i < size-1; i++)
+        {
+        	if (dup.contains(list_pairs.arr.get(i)))
+            {
+        		continue;        	
+        	}
+            else
+            {
+        		points.add(list_pairs.arr.get(i));
+        	}
+
+        	String[] first_set = ((String)list_pairs.arr.get(i)).split(",");
+
+        	for (int j = 1; j < size; j++)
+            {
+                String[] second_set = ((String)list_pairs.arr.get(j)).split(",");
+        		if((first_set[0].equals(second_set[2])) && (first_set[1].equals(second_set[3])))
+                {
+        			dup.add(list_pairs.arr.get(j));        			
+        		}
+        	}
+        }
+		return points;
+	}
+
+    // This function calculates the distance between the two points
+    static double Distance(double point1_x, double point1_y, double point2_x, double point2_y)
+    {
+    	return Math.pow((point1_x - point2_x), 2) + Math.pow((point1_y-point2_y), 2);
+    }              
+}

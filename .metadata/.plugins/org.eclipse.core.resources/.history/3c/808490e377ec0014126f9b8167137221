@@ -1,0 +1,287 @@
+package geospatial.operation2;
+
+import java.awt.Shape;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Area;
+import java.io.BufferedWriter;
+import java.io.Serializable;
+import java.nio.file.FileSystem;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.Arrays;
+import java.util.List;
+import java.io.*;
+import java.util.*;
+import java.net.*;
+
+import org.apache.hadoop.hdfs.protocol.proto.DatanodeProtocolProtos.DatanodeRegistrationProtoOrBuilder;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.rdd.RDD;
+import org.apache.spark.util.*;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.function.*;
+import org.apache.spark.broadcast.Broadcast;
+import org.apache.spark.api.java.function.FlatMapFunction;
+import org.apache.hadoop.fs.*;
+import org.apache.hadoop.conf.*;
+import org.apache.hadoop.io.*;
+import org.apache.hadoop.mapred.*;
+import org.apache.hadoop.util.*;
+
+//Finds the Convex Hull for a given ArrayList of points
+class QuickHull
+{
+    public ArrayList<points> quickHull(ArrayList<points> pointss)
+    {
+        ArrayList<points> convexHull = new ArrayList<points>();
+
+        if (pointss.size() < 3)
+            return (ArrayList) pointss.clone();
+
+        int minpoints = -1, maxpoints = -1;
+
+        double minX = Double.MAX_VALUE;
+
+        double maxX = Double.MIN_VALUE;
+
+        for (int i = 0; i < pointss.size(); i++)
+        {
+            if (pointss.get(i).x < minX)
+            {
+                minX = pointss.get(i).x;
+                minpoints = i;
+            }
+
+            if (pointss.get(i).x > maxX)
+            {
+                maxX = pointss.get(i).x;
+                maxpoints = i;
+            }
+        }
+
+        points A = pointss.get(minpoints);
+        points B = pointss.get(maxpoints);
+
+        convexHull.add(A);
+        convexHull.add(B);
+
+        pointss.remove(A);
+        pointss.remove(B);
+
+        ArrayList<points> leftSet = new ArrayList<points>();
+        ArrayList<points> rightSet = new ArrayList<points>();
+
+        for (int i = 0; i < pointss.size(); i++)
+        {
+            points p = pointss.get(i);
+
+            if (pointsLocation(A, B, p) == -1)
+                leftSet.add(p);
+            else if (pointsLocation(A, B, p) == 1)
+                rightSet.add(p);
+        }
+
+        hullSet(A, B, rightSet, convexHull);
+        hullSet(B, A, leftSet, convexHull);
+
+        return convexHull;
+    }
+
+    public double distance(points A, points B, points C)
+    {
+        double ABx = B.x - A.x;
+        double ABy = B.y - A.y;
+        double num = ABx * (A.y - C.y) - ABy * (A.x - C.x);
+
+        if (num < 0)
+            num = -num;
+
+        return num;
+    }
+
+    public void hullSet(points A, points B, ArrayList<points> set, ArrayList<points> hull)
+    {
+        int insertPosition = hull.indexOf(B);
+
+        if (set.size() == 0)
+            return;
+
+        if (set.size() == 1)
+        {
+            points p = set.get(0);
+            set.remove(p);
+            hull.add(insertPosition, p);
+
+            return;
+        }
+
+        double dist = Double.MIN_VALUE;
+
+        int furthestpoints = -1;
+
+        for (int i = 0; i < set.size(); i++)
+        {
+            points p = set.get(i);
+            double distance = distance(A, B, p);
+            if (distance > dist)
+            {
+                dist = distance;
+                furthestpoints = i;
+            }
+        }
+
+        points P = set.get(furthestpoints);
+        set.remove(furthestpoints);
+        hull.add(insertPosition, P);
+
+        // Determine who's to the left of AP
+        ArrayList<points> leftSetAP = new ArrayList<points>();
+
+        for (int i = 0; i < set.size(); i++)
+        {
+            points M = set.get(i);
+            if (pointsLocation(A, P, M) == 1)
+            {
+                leftSetAP.add(M);
+            }
+        }
+
+        // Determine who's to the left of PB
+        ArrayList<points> leftSetPB = new ArrayList<points>();
+
+        for (int i = 0; i < set.size(); i++)
+        {
+            points M = set.get(i);
+
+            if (pointsLocation(P, B, M) == 1)
+            {
+                leftSetPB.add(M);
+            }
+        }
+
+        hullSet(A, P, leftSetAP, hull);
+        hullSet(P, B, leftSetPB, hull);
+    }
+
+    public int pointsLocation(points A, points B, points P)
+    {
+        double cp1 = (B.x - A.x) * (P.y - A.y) - (B.y - A.y) * (P.x - A.x);
+        
+        if (cp1 > 0.0)
+            return 1;
+        else if (cp1 == 0.0)
+            return 0;
+        else
+            return -1;
+    }
+}
+
+//Class that defines a point with X and Y coordinates
+class points implements Serializable
+{
+    double x;
+    double y;
+    
+    points (double x1, double y1)
+    {
+        x = x1;
+        y = y1;
+    }
+}
+
+//Class that defines an arraylist of points
+class point_array implements Serializable
+{
+	ArrayList<points> arr;
+	
+	point_array()
+	{
+		arr = new ArrayList<points>();
+	}
+}
+
+public class App
+{
+    public static void main( String[] args )
+    {
+		//Initialising the spark configuration
+        SparkConf configuration = new SparkConf().setAppName("App").setMaster("spark://192.168.0.4:7077").set("spark.eventLog.enabled","true");
+        final JavaSparkContext sparkcontext_obj = new JavaSparkContext(configuration);
+        sparkcontext_obj.addJar("/home/nagarjuna/DDS_Project_Team17/Programs/operation2.jar");
+
+		//Reading the contents of the input from HDFS
+        JavaRDD<String> input = sparkcontext_obj.textFile("hdfs://master:54310/team17/operation5/ConvexHullTestData.csv");
+
+		//Splitting the input file read.
+        JavaRDD<String> words = input.flatMap(new FlatMapFunction<String, String>()
+            {
+                public Iterable<String> call(String s)
+                {
+                    return Arrays.asList(s.split(","));
+                }
+            }
+        );
+				
+		//Partitioning the input read into different partitions and finding a Convex Hull for each partition
+        JavaRDD<point_array> partition_res=words.mapPartitions(new FlatMapFunction<Iterator<String>, point_array>()
+            {
+                public Iterable<point_array> call(Iterator<String> t)
+                {
+                    ArrayList<points> r = new ArrayList<points>();
+                    while(t.hasNext())
+                    {
+                        r.add(new points(Double.parseDouble(t.next()),Double.parseDouble(t.next())));
+                    }
+                    QuickHull q1=new QuickHull();
+                    ArrayList<points> r1=q1.quickHull(r);
+                    ArrayList<point_array> result = new ArrayList<point_array>(); 
+                    point_array point_list = new point_array();
+                    
+                    point_list.arr.addAll(r1);
+                    result.add(point_list);
+                    
+                    return result;
+                }
+            }
+        );
+        
+		//Function to to find the convex hull of all the points which formed the local convex hull for each each partition
+        class global_convex_hull implements Function2<point_array,point_array,point_array>
+    	{
+    		public point_array call(point_array a,point_array b)
+    		{
+    			ArrayList<points> a1 = new ArrayList<points>();
+    			a1.addAll(a.arr);
+    			a1.addAll(b.arr);
+    			
+    			QuickHull q1=new QuickHull();
+                ArrayList<points> r1=q1.quickHull(a1);
+                
+                ArrayList<point_array> result = new ArrayList<point_array>(); 
+                point_array point_list = new point_array();
+                
+                point_list.arr.addAll(r1);
+                result.add(point_list);
+                
+                return point_list;
+    		}
+    	}
+        
+    	//Finding the global convex hull
+    	point_array result = partition_res.reduce(new global_convex_hull()); 
+        ArrayList<points> out_points = result.arr;           
+		JavaRDD<points> out_points_parallel=sparkcontext_obj.parallelize(out_points);
+		JavaRDD<String> final_output = out_points_parallel.map(new Function<points, String>()
+            {
+			    public String call(points v1)
+                {
+				    return (v1.x + " " + v1.y);
+			    }	
+		    }
+        );
+		
+		final_output.repartition(1).saveAsTextFile("hdfs://master:54310/team17/operation5/output_convex_hull.txt");
+    }
+}

@@ -1,0 +1,216 @@
+package geospatial.operation1;
+
+
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+import java.util.regex.Pattern;
+import java.util.Collections;
+
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.function.FlatMapFunction;
+import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.Function2;
+import org.apache.spark.util.Vector;
+import org.apache.batik.ext.awt.*;
+import org.apache.batik.ext.awt.geom.Polygon2D;
+import org.apache.spark.SparkConf;
+
+import scala.Tuple2;
+
+import java.awt.Polygon;
+import java.awt.Shape;
+import java.awt.geom.*;
+
+
+public class app3 {
+
+	
+	public static double[] describeCurrentSegment(PathIterator pi) {
+		double[] res_cordinates = new double[2];
+		    double[] coordinates = new double[6];
+	    int type = pi.currentSegment(coordinates);
+	    switch (type) {
+	    case PathIterator.SEG_MOVETO:
+	      //System.out.println("move to " + coordinates[0] + ", " + coordinates[1]);
+	      res_cordinates[0] = coordinates[0];
+	      res_cordinates[1] = coordinates[1];
+	      
+	      break;
+	    case PathIterator.SEG_LINETO:
+	      //System.out.println("line to " + coordinates[0] + ", " + coordinates[1]);
+	      res_cordinates[0] = coordinates[0];
+	      res_cordinates[1] = coordinates[1];
+	      
+	      break;
+	    case PathIterator.SEG_QUADTO:
+	      System.out.println("quadratic to " + coordinates[0] + ", " + coordinates[1] + ", "
+	          + coordinates[2] + ", " + coordinates[3]);
+	      break;
+	    case PathIterator.SEG_CUBICTO:
+	      System.out.println("cubic to " + coordinates[0] + ", " + coordinates[1] + ", "
+	          + coordinates[2] + ", " + coordinates[3] + ", " + coordinates[4] + ", " + coordinates[5]);
+	      break;
+	    case PathIterator.SEG_CLOSE:
+	      //System.out.println("close");
+	      res_cordinates[0] = -1;
+	      res_cordinates[1] = -1;
+	      
+	      break;
+	    default:
+	      break;
+	    }
+	    return res_cordinates;
+	  }
+	
+	
+	
+	
+	public static void main(String[] args) {
+		// TODO Auto-generated method stub
+		
+		
+		SparkConf conf = new SparkConf().setAppName("App").setMaster("spark://192.168.117.131:7077");
+    	JavaSparkContext sc = new JavaSparkContext(conf);
+    	
+    	
+    	JavaRDD<String> lines = sc.textFile("/home/nagarjuna/data/test_case.txt");
+    
+    	  JavaRDD<String> words = lines.flatMap(
+                  new FlatMapFunction<String, String>() {
+                    public Iterable<String> call(String s) {
+                    return Arrays.asList(s.split(","));
+                    }
+                  }
+                );
+    	
+    	
+    	JavaRDD<Shape> res= words.mapPartitions(new FlatMapFunction<Iterator<String>, Shape>() {
+
+            public Iterable<Shape> call(Iterator<String> t) {
+                
+            	int i = 0;
+            	Polygon2D pol1;
+            	Area a1 = null;
+                while(t.hasNext()){
+                	float[] xarr1 = new float[4];
+                	float[] yarr1 = new float[4];
+                	float[] co_ordinates = new float[4];
+                	co_ordinates[0] = Float.parseFloat(t.next());
+                	co_ordinates[1] = Float.parseFloat(t.next());
+                	co_ordinates[2] = Float.parseFloat(t.next());
+                	co_ordinates[3] = Float.parseFloat(t.next());
+                     
+                	xarr1[0] = co_ordinates[0];
+                	xarr1[1] = co_ordinates[0];
+                	xarr1[2] = co_ordinates[2];
+                	xarr1[3] = co_ordinates[2];
+                	
+                	
+                	yarr1[0] = co_ordinates[1];
+                	yarr1[1] = co_ordinates[3];
+                	yarr1[2] = co_ordinates[3];
+                	yarr1[3] = co_ordinates[1];
+                	
+                	
+                	
+                    if(i == 0)
+                    {
+                    	pol1 =  new Polygon2D(xarr1,yarr1,4);
+                    	a1 = new Area(pol1);
+                    	
+                     	
+                    }
+                    else
+                    {
+                    	Polygon2D pol2 = new Polygon2D(xarr1,yarr1,4);
+                       
+                    	Area a2 = new Area(pol2);
+                    	a1.add(a2);
+                    	
+                    	
+                    	
+                    }
+                    
+                    //System.out.println("inside map"+i);
+                    //
+                    //System.out.println(xarr1[0]+","+yarr1[1]);
+                    
+                    double[] final_co_ordinates = new double[2];
+               	   
+                 	  PathIterator pi = a1.getPathIterator(null);
+                      
+                 	   while (pi.isDone() == false) {
+                 		   //System.out.println("inside pi is done");
+                 		final_co_ordinates = describeCurrentSegment(pi);
+                 	      //System.out.println(""+final_co_ordinates[0]+","+final_co_ordinates[1]);
+                 	      pi.next();
+                 	    }
+
+
+              	
+
+                    	
+                	i++;		
+                    
+                }
+                /*System.out.println("Sending points");
+                for(int i=0;i<r.size();i++){
+                    System.out.println(r.get(i).x +" "+r.get(i).y);
+                }*/
+                
+                ArrayList<Shape> r1= new ArrayList<Shape>();
+                /*System.out.println("After convex");
+                for(int i=0;i<r1.size();i++){
+                    System.out.println(r1.get(i).x +" "+r1.get(i).y);
+                }*/
+                
+                Shape S1 = AffineTransform.getTranslateInstance(0,0).createTransformedShape(a1);
+                
+                r1.add(S1);
+                return r1;
+            }
+        });
+    	
+
+    	class Polyunion2 implements Function2<Shape,Shape, Shape>
+    	{
+    		public Shape call(Shape a,Shape b)
+    		{
+    			Area a1 = new Area(a);
+    			Area a2 = new Area(b);
+    			
+			   a1.add(a2);
+			   
+			   return AffineTransform.getTranslateInstance(0,0).createTransformedShape(a1);
+    			
+    			
+    		}
+    		
+    	
+    	}
+    	
+    	 Shape v = res.reduce(new Polyunion2());
+    	 
+    	 
+    	 System.out.println("final result");
+    	 double[] final_co_ordinates = new double[2];
+  	   
+   	  PathIterator pi = v.getPathIterator(null);
+        
+   	   while (pi.isDone() == false) {
+   		   //System.out.println("inside pi is done");
+   		final_co_ordinates = describeCurrentSegment(pi);
+   	      System.out.println(""+final_co_ordinates[0]+","+final_co_ordinates[1]);
+   	      pi.next();
+   	    }
+
+
+	}
+
+}

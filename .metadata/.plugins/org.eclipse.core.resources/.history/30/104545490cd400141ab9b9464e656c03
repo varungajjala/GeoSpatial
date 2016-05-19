@@ -1,0 +1,128 @@
+package geospatial1.operation1;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+import java.util.regex.Pattern;
+import java.util.Collections;
+
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.JavaRDD;
+import org.apache.spark.api.java.function.FlatMapFunction;
+import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.Function2;
+
+import com.vividsolutions.jts.geom.*;
+
+import org.apache.spark.SparkConf;
+
+public class App
+{
+	
+	public static void main(String[] args)
+    {
+	    SparkConf conf = new SparkConf().setAppName("App").setMaster("spark://192.168.117.137:7077");
+    	JavaSparkContext sc = new JavaSparkContext(conf);
+    	
+    	// Reading the input for union operation
+    	JavaRDD<String> lines = sc.textFile("hdfs://master:54310/team17/operation1/PolygonUnionTestData.csv");
+    	
+    	// Splitting the given input into iterable strings for mappartition 
+    	JavaRDD<String> words = lines.flatMap(new FlatMapFunction<String, String>()
+            {
+                public Iterable<String> call(String s)
+                {
+                    return Arrays.asList(s.split(","));
+                }
+            }
+        );
+    	
+    	// Map Partition function constructs local union for all the rectangles inside each partition
+    	JavaRDD<Geometry> res= words.mapPartitions(new FlatMapFunction<Iterator<String>, Geometry>()
+            {
+                public Iterable<Geometry> call(Iterator<String> t)
+                {
+            	
+                    GeometryFactory fact = new GeometryFactory();
+                    
+                    Geometry local_union = null;
+			        Polygon poly = null;
+			        
+                    while(t.hasNext())
+                    {
+                         String x1_string = t.next();
+                         String y1_string = t.next();
+                         String x2_string = t.next();
+                         String y2_string = t.next();
+                         
+                         // skip the lines if it contains x1,y1 meta data co-ordinates
+                         if(x1_string.equals("x1"))
+                        	continue;
+           	        
+                    	 Double x1 = Double.parseDouble(x1_string);
+			        	 Double y1 = Double.parseDouble(y1_string);
+			        	 Double x2 = Double.parseDouble(x2_string);
+			        	 Double y2 = Double.parseDouble(y2_string);
+			        	 
+			        	 Coordinate[] coordinates1 = new Coordinate[] {
+                                                                        new Coordinate(x1,y1),
+			        			                                        new Coordinate(x1,y2),
+			        			                                        new Coordinate(x2,y2),
+			        			                                        new Coordinate(x2,y1),
+			        			                                        new Coordinate(x1,y1)
+                                                                      };
+			        
+                        // construction of local union for all the rectangles
+                        poly = fact.createPolygon(coordinates1);
+                        if(local_union == null)
+                        {
+                            local_union = poly;
+                        }
+                        else
+                        {
+                            local_union = local_union.union(poly);
+                        }           
+                    }
+                    
+                    ArrayList<Geometry> result = new ArrayList<Geometry>(); 
+                    result.add(local_union);
+                    return result;
+                }
+            }
+        );
+    	
+    	// Construction of the global union in the reduce phase
+    	class Polyunion2 implements Function2<Geometry,Geometry, Geometry>
+    	{
+    		public Geometry call(Geometry a, Geometry b)
+    		{
+    		    Geometry c = a.union(b);
+			    return c;
+    		}
+    	}
+    	
+    	// final_result contains the resulting polygon
+    	Geometry final_result = res.reduce(new Polyunion2());
+    	
+    	// getting the co-ordinates for the resulting polygon
+    	Coordinate[] final_cordinates = final_result.getCoordinates();
+    	
+    	//converting the resulting coordinates into JAVARDD<Strings> 
+    	String[] output_strings = new String[final_cordinates.length-1];
+ 		
+ 		for (int i = 0; i < final_cordinates.length-1; i++)
+ 		{
+            output_strings[i] = final_cordinates[i].x + "," + final_cordinates[i].y;
+ 		    //System.out.println(final_cordinates[i].x + "," + final_cordinates[i].y);
+ 		}
+ 		 
+ 		List<String> co_ordinate_list = Arrays.asList(output_strings);
+ 		JavaRDD<String> output = sc.parallelize(co_ordinate_list);
+ 		
+ 		//writing the final cordinate list as output
+ 		output.repartition(1).saveAsTextFile("hdfs://master:54310/team17/operation1/PolygonUnionResult.txt");
+	}
+}
